@@ -1,22 +1,18 @@
 from ultralytics import YOLO
 
-# Load a COCO-pretrained YOLOv8n model
-model = YOLO("yolov8n.pt")
+import rclpy
+from rclpy.node import Node
+from ros2.image_raw_subscriber import ImageRawSubscriber
 
-# Display model information (optional)
-model.info()
+# ros2 publisher node 코드
+rclpy.init()
+node = ImageRawSubscriber()
 
-# Run inference (detection) on CPU
-results = model.predict(
-    source="test.jpg",
-    device="cpu"
-)
+# ros2 node callback 실행
+try:
+    rclpy.spin(node)
+except KeyboardInterrupt:
+    pass
 
-for box in results[0].boxes:
-    cls = int(box.cls)
-    conf = float(box.conf)
-
-    print(
-        model.names[cls],
-        conf
-    )
+node.destroy_node()
+rclpy.shutdown()
