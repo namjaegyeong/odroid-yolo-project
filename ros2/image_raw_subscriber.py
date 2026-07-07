@@ -8,6 +8,10 @@ from std_msgs.msg import String
 from ultralytics import YOLO
 
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy
+from rclpy.qos import HistoryPolicy
+from rclpy.qos import QoSProfile
+from rclpy.qos import ReliabilityPolicy
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
 
@@ -33,11 +37,18 @@ class ImageRawSubscriber(Node):
             10
         )
 
+        camera_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE
+        )
+
         self.create_subscription(
             Image,
             "/camera/image_raw",
             self.image_callback,
-            10
+            camera_qos
         )
 
         self.predict_thread = threading.Thread(
