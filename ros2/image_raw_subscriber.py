@@ -1,16 +1,19 @@
 import threading
 import time
+import json
+from pathlib import Path
+
 from std_msgs.msg import String
 
-from fsspec import json
-import numpy as np
 from ultralytics import YOLO
 
-import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 
-model = YOLO("yolov8n.pt")
+MODEL_PATH = Path(__file__).resolve().parents[1] / "yolov8n.pt"
+model = YOLO(str(MODEL_PATH))
+
 
 class ImageRawSubscriber(Node):
 
@@ -18,8 +21,17 @@ class ImageRawSubscriber(Node):
         super().__init__('image_raw_sub')
 
         self.latest_frame = None
+        self.latest_frame_id = 0
+        self.processed_frame_id = 0
         self.running = True
         self.lock = threading.Lock()
+        self.bridge = CvBridge()
+
+        self.result_pub = self.create_publisher(
+            String,
+            "/yolo/detections",
+            10
+        )
 
         self.create_subscription(
             Image,
@@ -35,26 +47,32 @@ class ImageRawSubscriber(Node):
         self.predict_thread.start()
 
     def image_callback(self, msg):
-        frame = np.frombuffer(
-            msg.data,
-            dtype=np.uint8
-        ).reshape(
-            msg.height,
-            msg.width,
-            3
-        )
+        try:
+            frame = self.bridge.imgmsg_to_cv2(
+                msg,
+                desired_encoding="bgr8"
+            )
+        except Exception as exc:
+            self.get_logger().warning(
+                f"Failed to convert image message: {exc}"
+            )
+            return
 
         with self.lock:
             self.latest_frame = frame
+            self.latest_frame_id += 1
 
     def predict_loop(self):
         while self.running:
             with self.lock:
-                frame = self.latest_frame
+                frame = None if self.latest_frame is None else self.latest_frame.copy()
+                frame_id = self.latest_frame_id
 
-            if frame is None:
+            if frame is None or frame_id == self.processed_frame_id:
                 time.sleep(0.01)
                 continue
+
+            self.processed_frame_id = frame_id
 
             results = model.predict(
                 source=frame,
@@ -66,15 +84,16 @@ class ImageRawSubscriber(Node):
 
             for box in results[0].boxes:
                 detections.append({
-                    "cls": int(box.cls),
-                    "conf": float(box.conf),
+                    "cls": int(box.cls.item()),
+                    "name": results[0].names[int(box.cls.item())],
+                    "conf": float(box.conf.item()),
                     "xyxy": box.xyxy.cpu().numpy()[0].tolist()
                 })
 
             self.publish_result(detections)
+            time.sleep(0.001)
 
     def publish_result(self, detections):
-
         msg = String()
 
         msg.data = json.dumps(detections)
@@ -83,4 +102,6 @@ class ImageRawSubscriber(Node):
 
     def destroy_node(self):
         self.running = False
+        if self.predict_thread.is_alive():
+            self.predict_thread.join(timeout=1.0)
         super().destroy_node()
